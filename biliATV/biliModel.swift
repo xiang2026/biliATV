@@ -13,11 +13,11 @@ class biliModel{
 //    var jsCallback = Dictionary<String,(String)->Void>();
     var videoDataCallback = Dictionary<String,(biliVideoModel)->Void>();
     var cid2AidAndPage = Dictionary<Int,Array<Int>>();
+    var timer: Timer?
     
-    
-    var webView:UIWebView!
+    var webView:BILWebView!
 
-    init(_ thisWebView:UIWebView){
+    init(_ thisWebView:BILWebView){
         webView = thisWebView;
     }
     
@@ -55,7 +55,7 @@ class biliModel{
     
     
     
-    public func webViewDidStartLoad(_ webview: UIWebView){
+    public func webViewDidStartLoad(_ webview: BILWebView){
         print("👉 WEB START ");
         
 
@@ -86,9 +86,9 @@ this.isTypeSupported = window.MediaSource.isTypeSupported;
         return link
     }
     
-    public func webViewDidFinishLoad(_ webview: UIWebView){
+    public func webViewDidFinishLoad(_ webview: BILWebView){
 
-        if (webview.isLoading) {
+        if (webview.isLoading()) {
             print("🈲️ 301");
             return;
         }
@@ -259,7 +259,7 @@ this.isTypeSupported = window.MediaSource.isTypeSupported;
             videoData[aid] = videoM;
             print("成功");
 //            print(videoM);
-            checkCompleted(videoM.aid,nowPage: Int(nowPage) ?? 1)
+            checkCompleted(videoM.aid,nowPage: Int(nowPage) ?? 1, errorMsg: nil)
         }
         //防止网页中的视频资源加载 销毁播放器
         webview.stringByEvaluatingJavaScript(from: "window.player.destroy()");
@@ -275,9 +275,17 @@ this.isTypeSupported = window.MediaSource.isTypeSupported;
         return video
     }
     
-    func checkCompleted(_ aid:Int,nowPage:Int ){
+    func stopTimmer() {
+        if timer != nil {
+            timer!.invalidate()
+            timer = nil
+        }
+    }
+    
+    func checkCompleted(_ aid:Int,nowPage:Int, errorMsg:String?){
         print("======checkCompleted======== \(aid)#\(nowPage)");
         if(videoDataCallback["\(aid)#\(nowPage)"] != nil){
+            var isHandled = false
             if var videoM = videoData["\(aid)"]{
                 print("has Data part.count:\(videoM.part.count)");
                 videoM = processingBiliModel(videoM)
@@ -286,7 +294,29 @@ this.isTypeSupported = window.MediaSource.isTypeSupported;
                     print("has Page \(nowPage)");
                     if part.playData != nil{
                         print("has playData");
+                        stopTimmer()
                         videoDataCallback["\(aid)#\(nowPage)"]!(videoM);
+                        isHandled = true
+                    }
+                }
+            }
+            
+            if !isHandled {
+                if errorMsg != nil {
+                    stopTimmer()
+                    
+                    var videoM = biliVideoModel()
+                    videoM.error_msg = errorMsg!;
+                    videoDataCallback["\(aid)#\(nowPage)"]!(videoM);
+                }
+                else {
+                    
+                    if timer == nil {
+                        weak var weakSelf = self
+                        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { (ktimer) in
+                            weakSelf?.stopTimmer()
+                            weakSelf?.checkCompleted(aid, nowPage:nowPage, errorMsg:"TimeOut")
+                        }
                     }
                 }
             }
@@ -298,7 +328,7 @@ this.isTypeSupported = window.MediaSource.isTypeSupported;
         if let ap = cid2AidAndPage[cid]{
             print(ap);
             if ap.count == 2{
-                checkCompleted(ap[0], nowPage: ap[1])
+                checkCompleted(ap[0], nowPage: ap[1], errorMsg: nil)
             }
         }
     }
@@ -306,6 +336,9 @@ this.isTypeSupported = window.MediaSource.isTypeSupported;
 
 
 struct biliVideoModel {
+    
+    var error_msg = ""
+    
     var aid:Int = 0
     var mid:Int = 0
     var pageno:Int = 0
@@ -330,6 +363,7 @@ struct biliVideoModel {
     var _dic: [String: Any] {
         
         var dic = Dictionary<String,Any>()
+        dic["error_msg"] = error_msg
         dic["aid"] = aid
         dic["mid"] = mid
         dic["pageno"] = pageno
@@ -508,7 +542,18 @@ class urlCacheHack : URLCache {
                 var playData = biliPlayDataModel()
                 
                 if let playDataJsonD = playDataRew as? Dictionary<String, Any> {
-                    let playDataD = playDataJsonD["data"] as? Dictionary<String, Any> ?? [:]
+                    // 番剧
+                    // https://bangumi.bilibili.com/player/web_api/v2/playurl?cid=53331296&appkey=84956560bc028eb7&otype=json&type=&quality=0&module=bangumi&season_type=1&qn=0&sign=55b1f426baa5631df2c4cef3e3ea4862
+                    // 动态
+                    // https://api.bilibili.com/x/player/playurl?avid=30169749&cid=52604596&qn=0&type=mp4&otype=json
+                    
+                    var playDataD: Dictionary<String, Any>
+                    if let mDataD = playDataJsonD["data"] as? Dictionary<String, Any> {
+                        playDataD = mDataD
+                    }
+                    else {
+                        playDataD = playDataJsonD
+                    }
                     
                     playData.cid = Int(cid) ?? 0;
                     playData.from   = playDataD["from"] as? String ?? ""
